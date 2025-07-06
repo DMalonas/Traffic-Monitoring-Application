@@ -1,0 +1,1815 @@
+
+
+==== .\java\org\example\Main.java ====
+
+package org.example;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello world!");
+    }
+}
+
+==== .\java\org\MyAmusementPark\src\communication\NodeAliveChecker.java ====
+
+package org.MyAmusementPark.src.communication;
+
+import org.MyAmusementPark.src.utilities.MessageTypes;
+
+import java.io.PrintStream;
+import java.net.Socket;
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class NodeAliveChecker implements Runnable {
+	
+	private ParkNodeCommunicator parkNodeCommunicator;
+	private String neighbourId;
+	private String neighbourIp;
+	private int neighbourPort;
+	
+	/**
+	 * NodeAliveChecker constructor.
+	 * @param parkNodeCommunicator parknode communicator object
+	 * @param neighbourId the neighbour id
+	 * @param neighbourIp the neighbour ip
+	 * @param neighbourPort the neighbour port
+	 */
+	public NodeAliveChecker(ParkNodeCommunicator parkNodeCommunicator, String neighbourId, String neighbourIp, int neighbourPort) {
+		this.parkNodeCommunicator = parkNodeCommunicator;
+		this.neighbourId = neighbourId;
+		this.neighbourIp = neighbourIp;
+		this.neighbourPort = neighbourPort;
+	}
+	
+	/**
+	 * Start thread that checks
+	 * if neighbour node is alive
+	 * every 5 seconds.
+	 */
+	public void start() {
+		Thread thread = new Thread(this);
+		thread.start();
+	}
+
+	/**
+	 * Send a message to the neighbour 
+	 * node every 5 seconds and if the 
+	 * message fails an exception is 
+	 * thrown and we know that the 
+	 * node is down. Then let the
+	 * ParkNodeCommunicator know
+	 * that the node has left.
+	 */
+	@Override
+	public void run() {
+		try {
+			
+			while(true) {
+				Thread.sleep(5000);
+				Socket socket = new Socket(neighbourIp, neighbourPort);
+				PrintStream printStream = new PrintStream(socket.getOutputStream());
+				printStream.println(MessageTypes.HEARTBEAT_MESSAGE);
+			}
+		} catch (Exception e) {
+			parkNodeCommunicator.nodeLeft(neighbourId);
+		}
+		
+	}
+
+}
+
+==== .\java\org\MyAmusementPark\src\communication\ParkNodeCommunicator.java ====
+
+package org.MyAmusementPark.src.communication;
+
+import org.MyAmusementPark.src.nodes.NodeToCommunicateWith;
+import org.MyAmusementPark.src.nodes.ParkNode;
+import org.MyAmusementPark.src.utilities.MessageTypes;
+
+import java.io.IOException;
+import java.io.PrintStream;
+import java.net.*;
+
+
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class ParkNodeCommunicator {
+
+	private int port;
+	private ParkNode parentParkNode;
+	private ParkNodeReceiver parkNodeReceiver;
+	
+	/**
+	 * Each ParkNodeCommunicator has a ParkNodeReceiver
+	 * for handling incoming messages. The ParkNodeCommunicator
+	 * forwards messages from the ParkNode to other ParkNode(s)
+	 * and forwards messages coming from other ParkNode(s) through
+	 * its ParkNodeReceiver, to the ParknNode's logic for handling.
+	 * @param parentParkNode The ParkNode for which we set
+	 * 		up the ParkNodeCommunicator.
+	 */
+	public ParkNodeCommunicator(ParkNode parentParkNode) {
+		this.port = Integer.parseInt(parentParkNode.getPort());
+		this.parentParkNode = parentParkNode;
+		parkNodeReceiver = new ParkNodeReceiver(this, port);
+		parkNodeReceiver.start();
+	}
+	
+	/**
+	 * Initiate the thread that checks if node is alive.
+	 * @param newNeighbour node to check if alive.
+	 */
+	public void startCheckingStatusOfNode(NodeToCommunicateWith newNeighbour) {
+		NodeAliveChecker nodeAliveChecker = new NodeAliveChecker(this, newNeighbour.getId(), newNeighbour.getIpAddress(), Integer.parseInt(newNeighbour.getPort()));
+		nodeAliveChecker.start();
+	}
+	
+	/**
+	 * Node has left.
+	 * @param nodeId id of the node that left.
+	 */
+	public void nodeLeft(String nodeId) {
+		parentParkNode.neighbourLeft(nodeId);
+	}
+	
+	/**
+	 * Run listener that starts the incoming messages
+	 * mechanism of the node.
+	 * @throws IOException
+	 */
+	public void runListener() throws IOException {
+		parkNodeReceiver.start();
+	}
+	
+	/**
+	 * Sends messages to server (happens instantly).
+	 * @param ip The receiving's node id.
+	 * @param port The receiving's node port.
+	 * @param message The receiving's node message,
+	 * 		including the information of the 
+	 * 		id, ip, and port of the node which is sending
+	 * 		the message.
+	 * @throws UnknownHostException
+	 * @throws IOException
+	 */
+	public void runMessenger(String id, String ip, int port, String message) throws UnknownHostException, IOException {
+		try {
+			Socket socket = new Socket(ip, port);
+			PrintStream printStream = new PrintStream(socket.getOutputStream());
+			printStream.println(message); //Send the message through the output stream.
+			socket.close(); //Close the socket.
+		}
+		catch (UnknownHostException ue) {
+			parentParkNode.printToConsole("Node's " + id + " IP not accessible");
+		}
+		catch (IOException ue) {
+			parentParkNode.printToConsole("Node " + id + " is not up or not accepting messages");
+		}
+	}
+	
+	/**
+	 * Process incoming message from ParkNodeReceiver. 
+	 * @param incomingMessage The message to process.
+	 * @throws UnknownHostException Message coming from someone
+	 * 		that is not registered as a neighbour.
+	 * @throws IOException IOException.
+	 */
+	public void processIncomingMessage(String incomingMessage) throws UnknownHostException, IOException {
+		String arr[] = incomingMessage.split(" ", 2); // https://stackoverflow.com/questions/5067942/what-is-the-best-way-to-extract-the-first-word-from-a-string-in-java
+		if (arr.length == 2) {
+			if(arr[0].equals(MessageTypes.ENTER_MESSAGE) || arr[0].equals(MessageTypes.EXIT_MESSAGE)) {	// Message from client.
+				parentParkNode.receiveFromClient(arr[0], arr[1]);
+			} else {	// Message from node.
+				String tokenizedMessage[] = arr[1].split(" ", 3);
+				/* ParkNode id, ParkNode ip, ParkNode port, message */
+				parentParkNode.receiveFromNode(arr[0], tokenizedMessage[0], tokenizedMessage[1], tokenizedMessage[2]);
+			}
+		}
+	}
+	
+	/**
+	 * Forward message from a node to another node.
+	 * @param receivingParkNode the node to forward the message to.
+	 * @param message The message.
+	 * @throws NumberFormatException Exception.
+	 * @throws UnknownHostException Exception.
+	 * @throws IOException Exception.
+	 */
+	public void sendOutgoingMessage(NodeToCommunicateWith receivingParkNode, String message) 
+			throws NumberFormatException, UnknownHostException, IOException {
+		runMessenger(receivingParkNode.getId(), receivingParkNode.getIpAddress(), Integer.parseInt(receivingParkNode.getPort()), 
+				parentParkNode.getId() + " " + parentParkNode.getIpAddress() + " " + parentParkNode.getPort() + " " + message);
+	}
+
+}
+
+
+==== .\java\org\MyAmusementPark\src\communication\ParkNodeReceiver.java ====
+
+package org.MyAmusementPark.src.communication;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.ServerSocket;
+import java.net.Socket;
+
+/**
+ * The ParkNodeReceiver receives messages for
+ * the node, forwards to the ParkNodeCommunicator
+ * and the ParkNodeCommunicator forwards them to
+ * the internal logic, in the ParkNode where the
+ * message is handled.
+ * @author dmalonas
+ *
+ */
+public class ParkNodeReceiver implements Runnable {
+	
+	private ParkNodeCommunicator parkNodeCommunicator;
+	ServerSocket serverSocket;
+	int port;
+	
+	/**
+	 * ParkNodeReceiver constructor.
+	 * @param parkNodeCommunicator 
+	 * @param port
+	 */
+	public ParkNodeReceiver(ParkNodeCommunicator parkNodeCommunicator, int port) {
+		this.parkNodeCommunicator = parkNodeCommunicator;
+		this.port = port;
+	}
+	
+	/**
+	 * Start a thread that listens
+	 * for incoming messages.
+	 */
+	public void start() {
+		Thread thread = new Thread(this);
+		thread.start();
+	}
+	
+	/**
+	 * Stop thread.
+	 * @throws IOException
+	 */
+	public void stop() throws IOException {
+		serverSocket.close();
+	}
+
+	/**
+	 * Overriden Runnable interface method run().
+	 * Open an buffered InputStream and wait for
+	 * input. When any message is received it is
+	 * forwarded to the ParkNodeCommunicator of 
+	 * the ParkNodeReceiver.
+	 */
+	@Override
+	public void run() {
+		try {
+			serverSocket = new ServerSocket(port);
+			System.out.println("Listening from port " + port);
+			while(true) {
+				Socket socket = serverSocket.accept();
+				// Receiving communication code here
+				InputStreamReader inputStreamReader = new InputStreamReader(socket.getInputStream());
+				BufferedReader bufferedReader = new BufferedReader(inputStreamReader);
+				String message = bufferedReader.readLine();
+				// Process incoming message
+				parkNodeCommunicator.processIncomingMessage(message);
+			}
+		} catch (IOException e) {
+			System.out.println("Port " + port + " listening part closed");
+			System.exit(0);
+		}
+		
+	}
+}
+
+
+==== .\java\org\MyAmusementPark\src\nodes\NodeToCommunicateWith.java ====
+
+package org.MyAmusementPark.src.nodes;
+
+/**
+ * 
+ * @author 171100408
+ *
+ */
+public class NodeToCommunicateWith {
+	
+	private String id;
+	private String ipAddress;
+	private String port;
+	
+	/**
+	 * Constructor to initialise class attributes.
+	 * @param id
+	 * @param ipAddress
+	 * @param port
+	 */
+	public NodeToCommunicateWith(String id, String ipAddress, String port) {
+		this.id = id;
+		this.ipAddress = ipAddress;
+		this.port = port;
+	}
+
+	/**
+	 * Get id
+	 * @return the id
+	 */
+	public String getId() {
+		return id;
+	}
+
+	/**
+	 * Set id
+	 * @param id the id
+	 */
+	public void setId(String id) {
+		this.id = id;
+	}
+
+	/**
+	 * Get ip address
+	 * @return the ip address
+	 */
+	public String getIpAddress() {
+		return ipAddress;
+	}
+
+	/**
+	 * Set ip address
+	 * @param ipAddress the ip address
+	 */
+	public void setIpAddress(String ipAddress) {
+		this.ipAddress = ipAddress;
+	}
+
+	/**
+	 * Get port
+	 * @return the port
+	 */
+	public String getPort() {
+		return port;
+	}
+
+	/**
+	 * Set port
+	 * @param port the port
+	 */
+	public void setPort(String port) {
+		this.port = port;
+	}
+
+}
+
+
+==== .\java\org\MyAmusementPark\src\nodes\ParkNode.java ====
+
+package org.MyAmusementPark.src.nodes;
+
+import org.MyAmusementPark.src.communication.ParkNodeCommunicator;
+import org.MyAmusementPark.src.utilities.MessageTypes;
+import org.MyAmusementPark.src.utilities.SharedResourceUtilities;
+
+import java.io.IOException;
+import java.net.UnknownHostException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.Queue;
+
+
+
+/**
+ * 
+ * @author 171100408
+ *
+ */
+public class ParkNode {
+	
+	// Identification attributes
+	private String id;                                    // Node id
+	private String ipAddress;                             // Node ip address
+	private String port;                                  // Node's port
+	private int metricValue;                              // Node's metric value (the node with the highest one wins the election).
+	private ParkNodeCommunicator parkNodeCommunicator;    // The socket communication is managed by the ParkNodeCommunication class.
+	
+	// Current coordinator info
+	private String currentCoordinatorId;                  // The id of the current coordinator.
+	private String currentCoordinatorIp;                  // The ip of the current coordinator.
+	private String currentCoordinatorPort;                  // The port of the current coordinator.
+	
+	// Election related attributes
+	private String currentElectionParentId;               // The parent's id for the current election. The election initialiser has no parent.
+	private int neighBoursReplied;                         // Number of neighbour nodes that replied.
+	private String maxMetricMessage;                      // The message containing the highest metric value, now.
+ 	private int currentMaxMetric;                         // The current max metric value that a node knows about.
+	private String currentEligibleCoordinatorId;            // The current eligible/possible coordinator that the node knows about - election not over yet.
+	private String currentEligibleCoordinatorIp;            // The current eligible/possible coordinator's IP that the node knows about - election not over yet.
+	private String currentEligibleCoordinatorPort;            // The current eligible/possible coordinator's port that the node knows about - election not over yet.
+	private boolean startedElection;                      // True if the node is the one that initiated the election.
+	private boolean expectingCoordinatorInfo;             // True if the node is expecting message regarding who is the coordinator
+	private boolean isDesignatedElectionStarter;
+	
+	// Park operation and mutual exclusion related attributes
+	private boolean pendingCoordinatorReply;
+	private String ticketIdToEnter;
+	private String ticketIdToExit;
+	
+	// Neighbour nodes related attributes
+	private ArrayList<NodeToCommunicateWith> neighbours;               // A node's NodeToCommunicateWith objects are stored within the neighbours, ArrayList.
+	public ArrayList<NodeToCommunicateWith> possibleNeighbours;		// Possible neighbours are the ones that derive from node's input. After validating they are alive, they become neighbours
+	
+	// Being a Coordinator related attributes
+	private boolean isCoordinator;                        // True if the node is the current coordinator.
+	private Queue<NodeToCommunicateWith> queueOfRequestingNodes;
+	private NodeToCommunicateWith currentResourceUtilizingNode;
+	private NodeToCommunicateWith designatedElectionStarter;
+	
+	
+	
+	/**
+	 * This constructor is not really used.
+	 */
+	public ParkNode() {
+		
+		currentMaxMetric = -1;
+		metricValue = -1;
+		maxMetricMessage = null;
+
+		initializeGenericAttributes();
+	}
+	
+	/**
+	 * Constructor for the ParkNode.
+	 * A node has id, ip, port, and metric value.
+	 * @param id The node id
+	 * @param ipAddress The ip address of the node
+	 * @param port The port of the node
+	 * @param metricValue The metric value of the node 
+	 *     (the node with the highest wins the election)
+	 */
+	public ParkNode(String id, String ipAddress, String port, int metricValue) {
+		
+		this.id = id;
+		this.ipAddress = ipAddress;
+		this.port = port;
+		this.metricValue = metricValue;
+		
+		System.out.print("Node " + id + " ");
+		parkNodeCommunicator = new ParkNodeCommunicator(this); // Port to be defined by user or randomly
+		currentMaxMetric = metricValue;
+		maxMetricMessage = "[" + id + "," + metricValue + "," + ipAddress + "," + port + "]";
+		currentEligibleCoordinatorId = id;
+		currentEligibleCoordinatorIp = ipAddress;
+		currentEligibleCoordinatorPort = port;
+		
+		initializeGenericAttributes();
+	}
+	
+	
+	/**
+	 * Initialise attributes with false and null.
+	 */
+	public void initializeGenericAttributes() {
+		
+		currentCoordinatorId = null;
+		currentCoordinatorIp = null;
+		currentCoordinatorPort = null;
+		isCoordinator = false;                                 // No node is a coordinator when they are first created
+		
+		neighbours = new ArrayList<NodeToCommunicateWith>();
+		possibleNeighbours = new ArrayList<NodeToCommunicateWith>();
+		
+		currentElectionParentId = null;
+		neighBoursReplied = 0;
+		startedElection = false;
+		expectingCoordinatorInfo = true;
+		isDesignatedElectionStarter = false;
+		
+		pendingCoordinatorReply = false;
+		ticketIdToEnter = null;
+		ticketIdToExit = null;		
+	}
+	
+	/**
+	 * Establish communication.
+	 * @param port The port the node is listening.
+	 */
+	public void startCommunicator(String port) {
+		parkNodeCommunicator = new ParkNodeCommunicator(this); // Port to be defined by user or randomly
+		try {
+			parkNodeCommunicator.runListener();
+		} catch (IOException e) {
+			System.out.println("Socket error.");
+		}
+	}
+	
+	/**
+	 * Add a neighbour.
+	 * @param neighbour The node to add in the neighbours ArrayList of the node.
+	 */
+	public void addNeighbour(NodeToCommunicateWith newNeighbour) {
+		neighbours.remove(returnNeighbourById(newNeighbour.getId()));
+		neighbours.add(newNeighbour);
+		parkNodeCommunicator.startCheckingStatusOfNode(newNeighbour);
+	}
+	
+	
+	/**
+	 * Add a possible neighbour to the list of possible neighbours.
+	 * @param newNeighbour the neighbour node.
+	 */
+	public void addPossibleNeighbour(NodeToCommunicateWith newNeighbour) {
+		possibleNeighbours.add(newNeighbour);
+	}
+	
+	
+	/**
+	 * Remove a neighbouring node as a neighbour
+	 * because it left the network, by removing 
+	 * it from the neighbours ArrayList.
+	 * When a ParkNode leaves or gets terminated each 
+	 * one of it ParkNode neighbours removes it from 
+	 * their neighbours list. To avoid having this 
+	 * list modified while at the same time it is used
+	 * for another purpose, e.g. to broadcast an 
+	 * ELECTION_MESSAGE message to neighbours
+	 * (remember mutual exclusion has been implemented
+	 * only for the common resource Resource.txt and not for 
+	 * the neighbours list of the individual ParkNodes)
+	 * after the neighbour is removed from the list 
+	 * the thread in which the ParkNode runs sleeps 
+	 * for 2 seconds. That way conflicts are avoided. 
+	 * @param neighbourId the id of the neighbouring node that left.
+	 */
+	public void neighbourLeft(String neighbourId) {
+		printToConsole("Neighbour " + neighbourId + " left the network");
+		neighbours.remove(returnNeighbourById(neighbourId));
+		sleep(2000);	// To avoid parallel modification of the neighbors' arraylist (node/coordinator removal & election related operations)
+		if (neighbourId.equals(currentCoordinatorId)) {
+			coordinatorLeft(null);
+		}
+		if (isCoordinator && designatedElectionStarter.getId().equals(neighbourId)) {
+			pickDesignatedElectionStarter();
+		}
+	}
+	
+	/**
+	 * Remove the information about the coordinator
+	 * and then broadcast the message to the 
+	 * neighbours (except from the parent node that 
+	 * forwarded the information that the coordinator 
+	 * has left if there is one) and then if the 
+	 * node is a designated election starter will 
+	 * also start the new election.
+	 * @param doNotInformNodeId the node to except from 
+	 *                          the broadcasting (the parent node).
+	 */
+	public void coordinatorLeft(String doNotInformNodeId) {
+		currentCoordinatorId = null;
+		currentCoordinatorIp = null;
+		currentCoordinatorPort = null;
+		pendingCoordinatorReply = false;
+		broadcastToArrayListNodes(MessageTypes.COORDINATOR_LEFT_MESSAGE, neighbours, doNotInformNodeId);
+		if (isDesignatedElectionStarter) {
+			startedElection = true;
+			broadcastToArrayListNodes(MessageTypes.ELECTION_MESSAGE, neighbours, null);
+			isDesignatedElectionStarter = false;
+		}
+	}
+	
+	/**
+	 * Sleep for int millis milliseconds.
+	 * @param millis number of milliseconds
+	 */
+	public void sleep(int millis) {
+		try {
+			Thread.sleep(millis);
+		} catch (InterruptedException e) {
+			printToConsole("Sleep error");
+		}
+	}
+	
+	
+	/**
+	 * 
+	 * @param message The broadcast message that is sent.
+	 * By design that can be either ELECTION_MESSAGE,
+	 * when the node initiates an election, or 
+	 * NEW_NEIGHBOUR_MESSAGE when a new flexible node
+	 * informs its potential neighbours that it exists, 
+	 * or a LEAVE message when the node is leaving.
+	 * @param arraylist all neighbours from node's file
+	 * @param exceptionNodeId a neighbour node we wish to exclude from the broadcast because it is
+	 *        the node from which we received the election message in the first place.
+	 */
+	public void broadcastToArrayListNodes(String message, ArrayList<NodeToCommunicateWith> arraylist, String exceptionNodeId) {
+		Iterator<NodeToCommunicateWith> arraylistIterator = arraylist.iterator(); //all neighbours from the node's file.
+		while (arraylistIterator.hasNext()) {
+			NodeToCommunicateWith arrayListItem = arraylistIterator.next();
+			if (!arrayListItem.getId().equals(exceptionNodeId))
+				sendToNode(arrayListItem, message);
+		}
+	}
+	
+	/**
+	 * Send message to node.
+	 * @param nodeId  The node ID.
+	 * @param message The message to send.
+	 */
+	public void sendToNode(String nodeId, String message) {
+		NodeToCommunicateWith neighbor = returnNeighbourById(nodeId);
+		if (neighbor != null)
+			sendToNode(neighbor, message);
+	}
+	
+	/**
+	 * Send message to node.
+	 * @param node The node to send a message to.
+	 * @param message The actual message.
+	 */
+	public void sendToNode(NodeToCommunicateWith node, String message) {
+		try {
+			printToConsole("Send to " + node.getId() + ": " + message);
+			parkNodeCommunicator.sendOutgoingMessage(node, message);
+		} catch (Exception e) {
+			printToConsole("Error sending message " + message + " to node " + node);
+		}
+	}
+	
+	
+	/**
+	 * Send message to coordinator.
+	 * @param message message to send to the coordinator.
+	 */
+	public void sendToCoordinator(String message) {
+		try {
+			printToConsole("Send to Coordinator " + currentCoordinatorId + ": " + message);
+			parkNodeCommunicator.sendOutgoingMessage(new NodeToCommunicateWith(currentCoordinatorId,
+					currentCoordinatorIp, currentCoordinatorPort), message);
+		} catch (Exception e) {
+			printToConsole("Error sending message " + message + " to coordinator " + currentCoordinatorId);
+		}
+	}
+	
+	
+	/**
+	 * Get neighbour ID.
+	 * @param nodeId The node ID.
+	 * @return The NodeToCommunicateWith object with the given ID.
+	 */
+	public NodeToCommunicateWith returnNeighbourById(String nodeId) {
+		Iterator<NodeToCommunicateWith> neighboursIterator = neighbours.iterator();
+		while (neighboursIterator.hasNext()) {
+			NodeToCommunicateWith neighbour = neighboursIterator.next();
+			if (neighbour.getId().equals(nodeId))
+				return neighbour;
+		}
+		return null;
+	}
+	
+	
+	/**
+	 * Received message from client (ENTER, or EXIT request).
+	 * @param messageType ENTER_MESSAGE, EXIT_MESSAGE, the message type
+	 * @param ticketID The id of the ticket.
+	 */
+	public void receiveFromClient(String messageType, String ticketID) {
+		if(!pendingCoordinatorReply && (messageType.equals(MessageTypes.ENTER_MESSAGE) || messageType.equals(MessageTypes.EXIT_MESSAGE))) {
+			pendingCoordinatorReply = true;
+			if (messageType.equals(MessageTypes.ENTER_MESSAGE)) {
+				ticketIdToEnter = ticketID;
+			}
+			else {
+				ticketIdToExit = ticketID;
+			}
+			printToConsole(messageType + " REQUEST BY " + ticketID);
+			sendRequestToCoordinator();
+		}
+		else {
+			printToConsole(messageType + " REQUEST BY " + ticketID + ": BAD REQUEST OR NODE BUSY ON ANOTHER REQUEST");
+		}
+	}
+	
+	/**
+	 * Send a request to the coordinator. 
+	 * First check if I am the coordinator.
+	 * If not the send "ENTER/EXIT REQUEST BY" + ticketID
+	 */
+	public void sendRequestToCoordinator() {
+		pendingCoordinatorReply = true;
+		if (currentCoordinatorId == null) {
+			printToConsole(MessageTypes.ENTER_DENIED_NO_COORDINATOR_MESSAGE);
+			pendingCoordinatorReply = false;
+		}
+		else if (isCoordinator) {
+			handleMessageAsCoordinator(id, MessageTypes.MYSELF_MESSAGE, MessageTypes.MYSELF_MESSAGE, MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE);
+		}
+		else {
+			sendToCoordinator(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE);
+		}
+	}
+	
+	/**
+	 * Handles messages. A message can be: ELECTION, ELECTION-ACK,
+	 *     ELECTION-ACK [nodeID, metricValue], or COORDINATOR.   WHEN A NODE RECEIVES THE COORDINATOR MESSAGE IT BROADCASTS IT EVERYWHERE EVEN TO ITS PARENT AND THAT WHILE IT ADDS A LITTLE BIT OF OVERHEAD IT ALSO MAKE THE SYSTEM MORE FAULT TOLERANCE THROUGH REDUNDANCY, SINCE IT CATERS FOR THE CASE THAT A NODE GOES DOWN.
+	 * @param parkNodeId The node id.
+	 * @param message The message.
+	 */
+	/**
+	 * Handles messages. A message can be: 
+	 * 			NEW_NEIGHBOUR_MESSAGE
+	 * 			WELCOME_MESSAGE
+	 * 			REQUEST_RESOURCE_ACCESS_MESSAGE
+	 * 			RELEASING_RESOURCE_MESSAGE
+	 * 			ELECTION_MESSAGE
+	 * 			ELECTION_ACK_MESSAGE
+	 * 			NODE_LEAVING_MESSAGE
+	 * 			COORDINATOR_LEFT_MESSAGE
+	 * 			DESIGNATED_ELECTION_STARTER_MESSAGE.
+	 * 			or an ELECTION_ACK_MESSAGE+metric
+	 * 			or a coordinator message.
+	 * @param parkNodeId   The id of the node that sent/forwarded the message.
+	 * @param parkNodeIp   The ip of the node that sent/forwarded the message.
+	 * @param parkNodePort The port of the node that sent/forwarded the message.
+	 * @param message      The message.
+	 */
+	public void receiveFromNode(String parkNodeId, String parkNodeIp, String parkNodePort, String message) {
+		printToConsole("Receive from " + parkNodeId + ": " + message);
+		
+		// If the message is NEW_NEIGHBOUR ("Flexible" network scenario)
+		if (message.equals(MessageTypes.NEW_NEIGHBOUR_MESSAGE)) {
+			handleNewNeighbourMessage(parkNodeId, parkNodeIp, parkNodePort);
+		}
+		// If the neighbour has answered our NEW_NEIGHBOUR_MESSAGE with WELCOME_MESSAGE
+		else if (message.equals(MessageTypes.WELCOME_MESSAGE)) {
+			handleWelcomeMessage(parkNodeId, parkNodeIp, parkNodePort);
+		} 
+		//If a node wants to request access from the coordinator or let it know that it will be releasing the resource.
+		else if (message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) || message.equals(MessageTypes.RELEASING_RESOURCE_MESSAGE)) {
+			handleMessageAsCoordinator(parkNodeId, parkNodeIp, parkNodePort, message);
+		}
+		// If the message is ELECTION
+		else if (message.equals(MessageTypes.ELECTION_MESSAGE)) {
+			handleElectionMessage(parkNodeId);
+		}
+		// If the message is ELECTION-ACK
+		else if (message.equals(MessageTypes.ELECTION_ACK_MESSAGE)) {
+			handleElectionAckMessage();
+		}
+		//If the messsage is about a neighbour node that left the network.
+		else if (message.equals(MessageTypes.NODE_LEAVING_MESSAGE)) {
+			handleNodeLeavingMessage(parkNodeId);
+		}
+		//If the message is about the coordinator that left.
+		else if (message.equals(MessageTypes.COORDINATOR_LEFT_MESSAGE)) {
+			handleCoordinatorLeftMessage(parkNodeId);
+		}
+		/* If the message is from the coordinator making this ParkNode the designated election starter node 
+		   that will start the election if the coordinator leaves or gets terminated. 
+		*/
+		else if (message.equals(MessageTypes.DESIGNATED_ELECTION_STARTER_MESSAGE)) {
+			isDesignatedElectionStarter = true;
+		}
+		
+		/* If the message is not ELECTION, or ELECTION-ACK, or any of the above,
+		 * that means that one of the children sends a message with metric info
+		 * to its parent,or that we are dealing with a COORDINATOR message.
+		 */
+		else {
+			String[] tokenizedMessage = message.split(" ");  // split the message.
+			//One of the children has replied with metric value info.
+			if (tokenizedMessage[0].equals(MessageTypes.ELECTION_ACK_MESSAGE)) {
+				handleMetricReceivedMessage(tokenizedMessage[1]); //the last word of tokenizedMessage[1] contains the metric.
+			}
+			//Handling the new coordinator message. (NEW_COORDINATOR_MESSAGE id ip port) 
+			else if (tokenizedMessage[0].equals(MessageTypes.NEW_COORDINATOR_MESSAGE)) {
+				handleNewCoordinatorMessage(parkNodeId, tokenizedMessage);
+			}
+			//Handling the existing coordinator message to the new "flexible nodes".
+			else if (tokenizedMessage[0].equals(MessageTypes.EXISTING_COORDINATOR_MESSAGE)) {
+				handleExistingCoordinatorMessage(parkNodeId, parkNodeIp, parkNodePort, tokenizedMessage);
+			}
+			//When a ParkNode gets access to the common resource, Resource.txt.
+			else if (tokenizedMessage[0].equals(MessageTypes.GRANTED_RESOURCE_ACCESS_MESSAGE)) {
+				handleGrantedResourceAccessMessage(parkNodeId);
+			}
+			//When a ParkNode has been denied access by the coordinator to the common resource Resource.txt.
+			else if (tokenizedMessage[0].equals(MessageTypes.DENIED_RESOURCE_ACCESS_MESSAGE)) {
+				handleDeniedResourceAccessMessage(parkNodeId);
+			}
+		}
+	}
+	
+	/**
+	 * A node has sent to this node a NEW_NEIGHBOUR message.
+	 * @param parkNodeId   The id of the node that sent the message.
+	 * @param parkNodeIp   The ip of the node that sent the message.
+	 * @param parkNodePort The port of the node that sent the message.
+	 */
+	public void handleNewNeighbourMessage(String parkNodeId, String parkNodeIp, String parkNodePort) {
+		NodeToCommunicateWith newNeighbour = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
+		addNeighbour(newNeighbour);
+		if (currentCoordinatorId != null)
+			sendToNode(parkNodeId, MessageTypes.EXISTING_COORDINATOR_MESSAGE + " " + currentCoordinatorId + " " + currentCoordinatorIp + " " + currentCoordinatorPort);
+		else
+			sendToNode(parkNodeId, MessageTypes.WELCOME_MESSAGE);
+	}
+	
+	/**
+	 * Handle WELCOME_MESSAGE message from neighbour node this ParkNode has
+	 * on its list of potential neighbours, and to which it sent a NEW_NEIGHBOUR_MESSAGE,
+	 * to which the node from which this node is now receiving the WELCOME_MESSAGE, 
+	 * has replied with the WELCOME_MESSAGE to confirm that it added this node to 
+	 * its own list of neighbours as well.
+	 * @param parkNodeId   The id of the ParkNode that sent the message.
+	 * @param parkNodeIp   The ip of the ParkNode that sent the message.
+	 * @param parkNodePort The port of the ParkNode from which it sent the message.
+	 */
+	public void handleWelcomeMessage(String parkNodeId, String parkNodeIp, String parkNodePort) {
+		/* Create new neighbour. */
+		NodeToCommunicateWith newNeighbour = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
+		/* Add new neighbour to the list of neighbours. */
+		addNeighbour(newNeighbour);
+	}
+	
+	/**
+	 * This method is utilised by a coordinator node.
+	 * Messages handled by a node that has the attribute
+	 * of the coordinator is access requests to the common resource
+	 * Resource.txt, messages that inform the coordinator that 
+	 * the resource has been released.
+	 * @param parkNodeId   The id of the ParkNode that sent/forwarded the message
+	 * @param parkNodeIp   The ip of the ParkNode that sent/forwarded the message
+	 * @param parkNodePort The port from which the ParkNode that sent/forwarded to the coordinator
+	 *                     the message is listening.
+	 * @param message      The actual message (REQUEST_RESOURCE_ACCESS_MESSAGE/RELEASING_RESOURCE_MESSAGE)
+	 *                     and the information of the node that (originally) sent it.
+	 */
+	public void handleMessageAsCoordinator(String parkNodeId, String parkNodeIp, String parkNodePort, String message) {
+		if (isCoordinator) {
+			if (!parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode == null) {
+				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
+				sendToNode(nodeExpectingReply, MessageTypes.GRANTED_RESOURCE_ACCESS_MESSAGE);
+				currentResourceUtilizingNode = nodeExpectingReply;
+			}
+			else if (!parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode != null) {
+				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
+				queueOfRequestingNodes.add(nodeExpectingReply);
+			}
+			else if (message.equals(MessageTypes.RELEASING_RESOURCE_MESSAGE) && currentResourceUtilizingNode.getId().equals(parkNodeId)) {
+				currentResourceUtilizingNode = null;
+				if (!queueOfRequestingNodes.isEmpty()) {
+					NodeToCommunicateWith nodeExpectingReply = queueOfRequestingNodes.remove();
+					if (!nodeExpectingReply.getId().equals(id)) {
+						currentResourceUtilizingNode = nodeExpectingReply;
+						sendToNode(nodeExpectingReply, MessageTypes.GRANTED_RESOURCE_ACCESS_MESSAGE);
+					}
+					else {
+						pendingCoordinatorReply = false;
+						currentResourceUtilizingNode = nodeExpectingReply;
+						accessResource();
+					}
+				}
+			}
+			else if (parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode == null) {
+				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
+				pendingCoordinatorReply = false;
+				currentResourceUtilizingNode = nodeExpectingReply;
+				accessResource();
+			}
+			else if (parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode != null) {
+				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
+				queueOfRequestingNodes.add(nodeExpectingReply);
+			}
+		}
+	}
+	
+	/**
+	 * Sends the information of the node with the
+	 * highest metric (per this node) to the 
+	 * parent node, if all the neighbours have 
+	 * replied with ELECTION_ACK, or ELECTION_ACK + maxMetricMessage.
+	 */
+	public void handleElectionAckMessage() {
+		neighBoursReplied++;
+		if (allNeighboursReplied()) {
+			//if all neighbours replied send to parent my current coordinator.
+			sendToNode(currentElectionParentId, MessageTypes.ELECTION_ACK_MESSAGE + " " + maxMetricMessage);
+			clearElection();
+		}
+	}
+	
+	/**
+	 * When a ParkNode leaves or gets terminated each 
+	 * one of it ParkNode neighbours removes it from 
+	 * their neighbours list. To avoid having this 
+	 * list modified while at the same time it is used
+	 * for another purpose, e.g. to broadcast an 
+	 * ELECTION_MESSAGE message to neighbours
+	 * (remember mutual exclusion has been implemented
+	 * only for the common resource Resource.txt and not for 
+	 * the neighbours list of the individual ParkNodes)
+	 * after the neighbour is removed from the list 
+	 * the thread in which the ParkNode runs sleeps 
+	 * for 2 seconds. That way conflicts are avoided. 
+	 * If the node that leaves or gets terminated is 
+	 * the coordinator node, then a neighbour of the 
+	 * node is assigned with the attribute of being 
+	 * the new election designated starter.
+	 * @param parkNodeId The id of the node to remove.
+	 */
+	public void handleNodeLeavingMessage(String parkNodeId) {
+		neighbours.remove(returnNeighbourById(parkNodeId));
+		sleep(2000); // To avoid parallel modification of the neighbors' arraylist (node/coordinator removal & election related operations)
+		if (parkNodeId.equals(currentCoordinatorId)) {
+			coordinatorLeft(null);
+		}
+		if (isCoordinator && designatedElectionStarter.getId().equals(parkNodeId)) {
+			pickDesignatedElectionStarter();
+		}
+	}
+	
+	/**
+	 * Node lets all the neighbours know that the coordinator is
+	 * down and then remove it as well from itself. 
+	 * @param parkNodeId
+	 */
+	public void handleCoordinatorLeftMessage(String parkNodeId) {
+		if (currentCoordinatorId != null) {
+			neighbours.remove(returnNeighbourById(currentCoordinatorId));
+			sleep(2000); 	// To avoid parallel modification of the neighbors' arraylist (node/coordinator removal & election related operations)
+			coordinatorLeft(parkNodeId);
+		}
+	}
+	
+	/**
+	 * Method that manages the value of max metric.
+	 * During an election, when the ParkNode receives
+	 * back a message from any of its children nodes
+	 * it has to keep the highest metric received, 
+	 * and when all of its children nodes have provided
+	 * a highest metric, it sends the one that is the 
+	 * highest of all the metrics provided from its 
+	 * children and its own to its own parent, or 
+	 * if the parent node is also the coordinator 
+	 * it just sends a broadcast message with information
+	 * about which ParkNode is the new coordinator and 
+	 * then ends the election.
+	 * @param maxMetricReplyParameter The maximum metric.
+	 */
+	public void handleMetricReceivedMessage(String maxMetricReplyParameter) {
+		neighBoursReplied++;
+		String trimmedMaxMetricReplyParameter = maxMetricReplyParameter.
+		    substring(1, maxMetricReplyParameter.length() - 1); // https://stackoverflow.com/questions/8846173/how-to-remove-first-and-last-character-of-a-string
+		String[] tokenizedTrimmedMaxMetricReplyParameter = trimmedMaxMetricReplyParameter.split(",");
+		String receivedMaxMetricId = tokenizedTrimmedMaxMetricReplyParameter[0];
+		int receivedMaxMetricValue = Integer.parseInt(tokenizedTrimmedMaxMetricReplyParameter[1]);
+		String receivedMaxMetricIp = tokenizedTrimmedMaxMetricReplyParameter[2];
+		String receivedMaxMetricPort = tokenizedTrimmedMaxMetricReplyParameter[3];
+		/* The child provided its parent with a metric value higher than the one the parent value 
+		 * currently holds. Now, the parent node will consider the value received by its child 
+		 * node as the best candidate and will forward that info unless another child node provides
+		 *  info about a node with even higher metric value.
+		 */
+		if (receivedMaxMetricValue > currentMaxMetric) {
+			currentEligibleCoordinatorId = receivedMaxMetricId;
+			currentEligibleCoordinatorIp = receivedMaxMetricIp;
+			currentEligibleCoordinatorPort = receivedMaxMetricPort;
+			currentMaxMetric = receivedMaxMetricValue;
+			maxMetricMessage = maxMetricReplyParameter;
+		}
+		/*
+		 * In addition with the previous if statement, 
+		 * if all the neighbours have replied and this 
+		 * is the node that started the election we
+		 * send the COORDINATOR message. 
+		 */
+		if (startedElection && allNeighboursReplied()) {
+			currentCoordinatorId = currentEligibleCoordinatorId;
+			currentCoordinatorIp = currentEligibleCoordinatorIp;
+			currentCoordinatorPort = currentEligibleCoordinatorPort;
+			if (currentCoordinatorId.equals(id)) {
+				setSelfAsCoordinator();
+			}
+			//broadcast new coordinator message to all neighbours.
+			broadcastToArrayListNodes(MessageTypes.NEW_COORDINATOR_MESSAGE + " " +
+						currentEligibleCoordinatorId + " " + currentEligibleCoordinatorIp +
+						" " + currentEligibleCoordinatorPort, neighbours, null);
+			startedElection = false;
+			expectingCoordinatorInfo = false;
+			clearElection();
+		}
+		/**
+		 * If we are not the node that started the election,
+		 * then we forward the ELECTION-ACK + max metric value we have 
+		 * derived by communicating with the neighbours, to our 
+		 * parent node.
+		 */
+		else if (!startedElection && allNeighboursReplied()) {
+			sendMaxMetricMessageToParent();
+		}
+	}
+	
+	/**
+	 * Method that puts together the NEW_COORDINATOR_MESSAGE message.
+	 * If the ParkNode happens to be the coordinator 
+	 * then it sets itself as coordinator. When the message is structured
+	 * it is broadcasted to the list of neighbours.
+	 * @param parkNodeId       The id of the node that sent the message.
+	 * @param tokenizedMessage Contains the information for the new coordinator.
+	 */
+	public void handleNewCoordinatorMessage(String parkNodeId, String[] tokenizedMessage) {
+		if (expectingCoordinatorInfo) {
+			currentCoordinatorId = tokenizedMessage[1];
+			currentCoordinatorIp = tokenizedMessage[2];
+			currentCoordinatorPort = tokenizedMessage[3];
+			broadcastToArrayListNodes(MessageTypes.NEW_COORDINATOR_MESSAGE+ " " + currentCoordinatorId + " " + currentCoordinatorIp + " " + currentCoordinatorPort, neighbours, parkNodeId);
+			//
+			if (currentCoordinatorId.equals(id)) {
+				setSelfAsCoordinator();
+			}
+			expectingCoordinatorInfo = false;
+		}
+	}
+	
+	/**
+	 * Update the information for the new coordinator and add 
+	 * the node that informed you about  which is the new
+	 * coordinator to the neighbours list. Then set the 
+	 * expectingCoordinatorInfo boolean to false.
+	 * @param parkNodeId        The id of the node that sent/forwarded the new coordinator information.
+	 * @param parkNodeIp        The ip of the node that sent/forwarded the new coordinator information.
+	 * @param parkNodePort      The port that the node that sent/forwarded the new coordinator information is listening from.
+	 * @param tokenizedMessage  The information about the new coordinator (id, ip, port).
+	 */
+	public void handleExistingCoordinatorMessage(String parkNodeId, String parkNodeIp, String parkNodePort, String[] tokenizedMessage) {
+		NodeToCommunicateWith newNeighbour = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
+		addNeighbour(newNeighbour);
+		currentCoordinatorId = tokenizedMessage[1];
+		currentCoordinatorIp = tokenizedMessage[2];
+		currentCoordinatorPort = tokenizedMessage[3];
+		expectingCoordinatorInfo = false;
+	}
+	
+	/**
+	 * When a node requests access to the common resource 
+	 * by the coordinator, it obtains the permission to 
+	 * access it by receiving a message directly from the 
+	 * coordinator with the ACCESS_GRANTED relevant message.
+	 * If that ACCESS_GRANTED is indeed from the node that 
+	 * everyone in the network knows as the coordinator and 
+	 * the node does actually expect a reply from the 
+	 * coordinator then it accesses the common resource, Resource.txt 
+	 * @param parkNodeId The coordinator's id.
+	 */
+	public void handleGrantedResourceAccessMessage(String parkNodeId) {
+		if (parkNodeId.equals(currentCoordinatorId) && pendingCoordinatorReply) {
+			pendingCoordinatorReply = false;
+			accessResource();
+		}
+	}
+	
+	/**
+	 * The node was denied access to the resource by the coordinator.
+	 * @param parkNodeId the id of the coordinator.
+	 */
+	public void handleDeniedResourceAccessMessage(String parkNodeId) {
+		if (parkNodeId.equals(currentCoordinatorId) && pendingCoordinatorReply) {
+			pendingCoordinatorReply = false;
+		}
+	}
+	
+	/**
+	 * Send highest metric to parent node. 
+	 */
+	public void sendMaxMetricMessageToParent() {
+		sendToNode(currentElectionParentId, MessageTypes.ELECTION_ACK_MESSAGE + " " + maxMetricMessage);
+		clearElection();
+	}
+	
+	/**
+	 * Check if all neighbours have replied.
+	 * @return True if all neighbours have replied.
+	 */
+	public boolean allNeighboursReplied() {
+		if (startedElection) {
+			return neighBoursReplied >= neighbours.size(); //he who starts the election has no parent so expects reply from everyone.
+		}
+		return neighBoursReplied >= neighbours.size() - 1; //they have a parent
+	}
+	
+	/**
+	 * Set parent node. If node has already a
+	 * parent-node, then it sends back to the 
+	 * node from which received the current 
+	 * ELECTION message (this is at least the 
+	 * second election message the node receives
+	 * if it has already been assigned with a 
+	 * parent node) an ELECTION-ACK message.
+	 * When the ParkNode sets a parent ParkNode,
+	 * it sends the ELECTION_MESSAGE to all of 
+	 * its neighbours but it parent and when 
+	 * all of them have replied with results 
+	 * it forwards the result with the info
+	 * about the ParkNode with the highest
+	 * metric back to its parent ParkNode.
+	 * @param parkNodeId the parent's node ID (the node that 
+	 *                  sent/forwarded to us the election message)
+	 */
+	public void handleElectionMessage(String parkNodeId) {
+		//Does not have parent node.
+		if (currentElectionParentId == null && !startedElection) {
+			currentElectionParentId = parkNodeId;
+			printToConsole("Set parent: " + currentElectionParentId);
+			expectingCoordinatorInfo = true;
+			broadcastToArrayListNodes(MessageTypes.ELECTION_MESSAGE, neighbours, currentElectionParentId);
+			if (allNeighboursReplied()) //All neighbours have replied so send max-metric back to parent.
+				sendMaxMetricMessageToParent();
+		}
+		//It does have parent node.
+		else {
+			sendToNode(parkNodeId, MessageTypes.ELECTION_ACK_MESSAGE);
+		}
+	}
+	
+	/**
+	 * Prints the message received from the console.
+	 * A user can start an ELECTION by typing ELECTION
+	 * to the console of one of the running nodes, or
+	 * terminate the node by typing LEAVE in the console.
+	 * @param message The message entered. Valid messages ELECTION, LEAVE.
+	 */
+	public void receiveFromConsole(String message) {
+		printToConsole("Received from Console: " + message);
+		if (message.equals(MessageTypes.ELECTION_MESSAGE)) {
+			startedElection = true;
+			broadcastToArrayListNodes(message, neighbours, null); //broadcast ELECTION_MESSAGE message to neighbours.
+		}
+		else if (message.equals(MessageTypes.LEAVE_MESSAGE))
+			leaveNetwork();
+	}
+	
+	/**
+	 * Check that there are at least two neighbours
+	 * in the neighbours ArrayList.
+	 * @return true if there are more than two neighbours in the 
+	 *         neighbours ArrayList, false otherwise.
+	 */
+	public boolean checkAtLeastTwoNeighbors() {
+		if (neighbours.size() < 2)
+			return false;
+		return true;
+	}
+	
+	/**
+	 * Print message to console proceeded by 
+	 * date and the node's id.
+	 * @param message The message to print.
+	 */
+	public void printToConsole(String message) {
+		System.out.println("[" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:SSS").format(new Date()) + " | " + id + " ] " + message);
+	}
+	
+	/**
+	 * Leave network.
+	 */
+	public void leaveNetwork() {
+
+		broadcastToArrayListNodes(MessageTypes.NODE_LEAVING_MESSAGE, neighbours, null);
+		printToConsole("LEAVING...");
+		System.exit(0);
+	}
+	
+	/**
+	 * Clear election.
+	 */
+	public void clearElection() {
+		currentElectionParentId = null;
+		neighBoursReplied = 0;
+		currentMaxMetric = metricValue;
+		currentEligibleCoordinatorId = id;
+		currentEligibleCoordinatorIp = ipAddress;
+		currentEligibleCoordinatorPort = port;
+		maxMetricMessage = "[" + id + "," + metricValue + "," + ipAddress + "," + port + "]";
+	}
+	
+	/**
+	 * Access the common resource, Resource.txt
+	 * (after permission has been
+	 * granted by the coordinator.
+	 */
+	public void accessResource() {
+		
+		if (ticketIdToEnter != null) {
+			printToConsole(MessageTypes.CHECKING_ENTER_ELIGIBILITY_MESSAGE + ticketIdToEnter);
+			
+			if (SharedResourceUtilities.enterFunctionality(ticketIdToEnter)) {
+				printToConsole(MessageTypes.ENTRY_ALLOWED_MESSAGE + ticketIdToEnter);
+			}
+			else {
+				printToConsole(MessageTypes.ENTRY_DENIED_MESSAGE + ticketIdToEnter + ". " + MessageTypes.NO_SPACE_AVAILABLE_MESSAGE);
+			}
+			ticketIdToEnter = null;
+		}
+		if (ticketIdToExit != null) {
+			printToConsole(MessageTypes.CHECKING_ENTER_ELIGIBILITY_MESSAGE + ticketIdToExit);
+			// Code for actual check and editing
+			if (SharedResourceUtilities.exitFunctionality(ticketIdToExit)) {
+				printToConsole(MessageTypes.EXIT_ALLOWED_MESSAGE + ticketIdToExit);
+			}
+			else {
+				printToConsole(MessageTypes.EXIT_DENIED_MESSAGE + ticketIdToExit + ". " + MessageTypes.NOT_A_VALID_ENTRY_MESSAGE);
+			}
+			ticketIdToExit = null;
+		}
+		if (!isCoordinator)
+			sendToCoordinator(MessageTypes.RELEASING_RESOURCE_MESSAGE);
+		else
+			handleMessageAsCoordinator(id, MessageTypes.MYSELF_MESSAGE, MessageTypes.MYSELF_MESSAGE, MessageTypes.RELEASING_RESOURCE_MESSAGE);
+	}
+	
+	/**
+	 * Get id.
+	 * @return The node id.
+	 */
+	public String getId() {
+		return id;
+	}
+
+	/**
+	 * Set ID.
+	 * @param id The node ID.
+	 */
+	public void setId(String id) {
+		this.id = id;
+	}
+
+	/**
+	 * Get ip address.
+	 * @return the ip address.
+	 */
+	public String getIpAddress() {
+		return ipAddress;
+	}
+
+	/**
+	 * Set ip address.
+	 * @param ipAddress the ip address.
+	 */
+	public void setIpAddress(String ipAddress) {
+		this.ipAddress = ipAddress;
+	}
+
+	/**
+	 * Get port number.
+	 * @return Return the port number.
+	 */
+	public String getPort() {
+		return port;
+	}
+
+	/**
+	 * Set port number.
+	 * @param port the port number.
+	 */
+	public void setPort(String port) {
+		this.port = port;
+	}
+
+	/**
+	 * Get current coordinator.
+	 * @return The current coordinator
+	 */
+	public String getCurrentCoordinator() {
+		return currentCoordinatorId;
+	}
+
+	/**
+	 * Set current coordinator.
+	 * @param currentCoordinator The current coordinator.
+	 */
+	public void setCurrentCoordinator(String currentCoordinator) {
+		this.currentCoordinatorId = currentCoordinator;
+	}
+
+	/**
+	 * Check if the node is a coordinator.
+	 * @return true if coordinator.
+	 */
+	public boolean isCoordinator() {
+		return isCoordinator;
+	}
+
+	/**
+	 * Set coordinator
+	 * @param isCoordinator set to true if coordinator.
+	 */
+	public void setSelfAsCoordinator() {
+		this.isCoordinator = true;
+		queueOfRequestingNodes = new LinkedList<NodeToCommunicateWith>();
+		currentResourceUtilizingNode = null;
+		pickDesignatedElectionStarter();
+	}
+	
+	/**
+	 * Pick a designated election starter node from 
+	 * the list of neighbour nodes of the coordinator
+	 * node. Specifically, the node chosen is by 
+	 * default the first in the neighbours ArrayList.
+	 */
+	public void pickDesignatedElectionStarter() {
+		if (!neighbours.isEmpty()) {
+			designatedElectionStarter = neighbours.get(0);
+			sendToNode(designatedElectionStarter, MessageTypes.DESIGNATED_ELECTION_STARTER_MESSAGE);
+		}
+	}
+	
+	/**
+	 * Set up socket communication.
+	 * @param ip      the node ip.
+	 * @param port    the port of the node.
+	 * @param message the message.
+	 * @throws UnknownHostException host not found.
+	 * @throws IOException IO problems.
+	 */
+	public void runMessenger(String id, String ip, int port, String message) throws UnknownHostException, IOException {
+		parkNodeCommunicator.runMessenger(id, ip, port, message);
+	}
+
+	/**
+	 * Get current max metric
+	 * @return the current max metric the node is aware about.
+	 */
+	public int getCurrentMaxMetric() {
+		return currentMaxMetric;
+	}
+
+	/**
+	 * Set the current max metric.
+	 * @param currentMaxMetric The current max metric.
+	 */
+	public void setCurrentMaxMetric(int currentMaxMetric) {
+		this.currentMaxMetric = currentMaxMetric;
+	}
+
+	/**
+	 * Get metric value.
+	 * @return The metric value.
+	 */
+	public int getMetricValue() {
+		return metricValue;
+	}
+
+	/**
+	 * Set metric value of node.
+	 * @param metricValue the metric value.
+	 */
+	public void setMetricValue(int metricValue) {
+		this.metricValue = metricValue;
+	}
+}
+
+
+==== .\java\org\MyAmusementPark\src\nodes\ParkNodesInputType.java ====
+
+package org.MyAmusementPark.src.nodes;
+
+import org.MyAmusementPark.src.utilities.ParkNodeUtilities;
+
+import java.io.*;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class ParkNodesInputType {
+	
+	ParkNode parkNode;
+	
+	private static final String FLEXIBLE_TYPE = "FLEXIBLE";
+	private static final String LOCALHOST = "127.0.0.1";
+	
+	/**
+	 * Constructor creates the node.
+	 * Possible neighbours are added 
+	 * to the possibleNeighbours list.
+	 * @param filename The name of the file from which we are reading the node details.
+	 */
+	public ParkNodesInputType(String filename) {
+		String id, port;
+		int metricValue;
+		boolean flexible = false;
+		try {
+			InputStream inputStream = ParkNodesInputType.class.getResourceAsStream(filename);
+			if (inputStream == null) {
+				throw new FileNotFoundException("Resource not found: " + filename);
+			}
+//			String relativePath = "../../../../Map/NODE_J.txt";
+//			Path filePath = Paths.get(relativePath).toAbsolutePath();
+//			System.out.println("Absolute path of the file: " + filePath);
+
+
+			BufferedReader br = new BufferedReader(new InputStreamReader(inputStream));	// https://stackoverflow.com/questions/5868369/how-to-read-a-large-text-file-line-by-line-using-java
+			id = br.readLine();
+			if (id.equals(FLEXIBLE_TYPE)) {
+				flexible = true;
+				id = br.readLine();
+			}
+			port = br.readLine();
+			metricValue = Integer.parseInt(br.readLine());
+			parkNode = new ParkNode(id, LOCALHOST, port, metricValue);
+			String neighbourLine, neighbourId, neighbourIp, neighbourPort;
+			String[] tokenizedNeighbourLine;
+			while ((neighbourLine = br.readLine()) != null) {
+				tokenizedNeighbourLine = neighbourLine.split(" ");	// https://docs.oracle.com/javase/7/docs/api/java/util/StringTokenizer.html
+				neighbourId = tokenizedNeighbourLine[0];
+				neighbourIp = tokenizedNeighbourLine[1];
+				neighbourPort = tokenizedNeighbourLine[2];
+				
+				NodeToCommunicateWith neighbour = new NodeToCommunicateWith(neighbourId, neighbourIp, neighbourPort);
+				parkNode.addPossibleNeighbour(neighbour);
+			}
+			if (flexible)
+				ParkNodeUtilities.addNeighborsInFlexibleNetworkFromFile(parkNode);
+			br.close();
+		} catch (FileNotFoundException e) {
+			System.out.println("File not found.");
+			System.exit(0);
+		} catch (IOException e) {
+			System.out.println("Cannot read file.");
+			System.exit(0);
+		} catch (Exception e) {
+			//System.out.println("Incorrect input format.");
+			e.printStackTrace();
+			System.exit(0);
+		}
+	}
+	
+	/**
+	 * Return ParkNode object created.
+	 * @return ParkNode object created.
+	 */
+	public ParkNode returnParkNode() {
+		return parkNode;
+	}
+
+}
+
+
+==== .\java\org\MyAmusementPark\src\run\MyAmusementParkMain.java ====
+
+package org.MyAmusementPark.src.run;
+
+import org.MyAmusementPark.src.nodes.ParkNode;
+import org.MyAmusementPark.src.nodes.ParkNodesInputType;
+import org.MyAmusementPark.src.utilities.MessageTypes;
+
+import java.util.Scanner;
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class MyAmusementParkMain {
+	/**
+	 * Derives the node information, and then
+	 * sets up a node. Then the node just
+	 * endlessly wait for input which is
+	 * fetched through a Scanner object.
+	 * If the input message is ELECTION,
+	 * then the node starts an election
+	 * if it is LEAVE then the node
+	 * leaves the network.
+	 *
+	 * @param args
+	 */
+	public static void main(String args[]) {
+//		if (args.length > 0) {
+		ParkNodesInputType parkNodesInputType = new ParkNodesInputType(args[0]); //Create node.
+		//		ParkNode parkNode = parkNodesInputType.returnParkNode(); //Return node.
+		ParkNode parkNode = parkNodesInputType.returnParkNode();
+		Scanner scanner = new Scanner(System.in);
+		while (true) {
+			String input = scanner.nextLine();
+			if (input.equals(MessageTypes.ELECTION_MESSAGE) || input.equals(MessageTypes.LEAVE_MESSAGE))
+				parkNode.receiveFromConsole(input); //handle console input
+			else {
+				System.out.println("Not a valid input. Please enter \"ELECTION\" or \"LEAVE\"");
+			}
+		}
+	}
+}
+
+
+==== .\java\org\MyAmusementPark\src\utilities\MessageTypes.java ====
+
+package org.MyAmusementPark.src.utilities;
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class MessageTypes {
+	public static final String CHECKING_ENTER_ELIGIBILITY_MESSAGE = "CHECKING ENTER ELIGIBILITY FOR ";
+	public static final String COORDINATOR_LEFT_MESSAGE = "COORDINATOR_LEFT";	
+
+	public static final String ELECTION_ACK_MESSAGE = "ELECTION_ACK";	
+	public static final String ELECTION_MESSAGE = "ELECTION";
+	public static final String ENTER_DENIED_NO_COORDINATOR_MESSAGE = "ENTER DENIED - NO COORDINATOR";
+	public static final String ENTER_MESSAGE = "ENTER";
+	public static final String ENTRY_ALLOWED_MESSAGE = "ENTRY ALLOWED FOR ";
+	public static final String ENTRY_DENIED_MESSAGE = "ENTRY DENIED FOR ";
+
+	public static final String EXIT_ALLOWED_MESSAGE = "EXIT ALLOWED FOR ";
+	public static final String EXIT_DENIED_MESSAGE = "EXIT DENIED FOR ";
+	public static final String EXISTING_COORDINATOR_MESSAGE = "EXISTING_COORDINATOR";
+	public static final String EXIT_MESSAGE = "EXIT";
+
+	public static final String DENIED_RESOURCE_ACCESS_MESSAGE = "DENIED";
+	public static final String DESIGNATED_ELECTION_STARTER_MESSAGE = "DESIGNATED_ELECTION_STARTER";
+	public static final String GRANTED_RESOURCE_ACCESS_MESSAGE = "GRANTED";
+	public static final String HEARTBEAT_MESSAGE = "HEARTBEAT";
+	public static final String LEAVE_MESSAGE = "LEAVE";
+	public static final String MYSELF_MESSAGE = "MYSELF";
+
+	public static final String NEW_COORDINATOR_MESSAGE = "COORDINATOR";
+	public static final String NEW_NEIGHBOUR_MESSAGE = "NEW_NEIGHBOUR";
+	public static final String NODE_LEAVING_MESSAGE = "LEAVING";
+	public static final String NOT_A_VALID_ENTRY_MESSAGE = "NOT A VALID ENTRY";
+	public static final String NO_SPACE_AVAILABLE_MESSAGE = "NO SPACE AVAILABLE";
+
+	public static final String RELEASING_RESOURCE_MESSAGE = "RELEASING_RESOURCE";	
+	public static final String REQUEST_RESOURCE_ACCESS_MESSAGE = "REQUEST_RESOURCE_ACCESS";
+	
+	public static final String WELCOME_MESSAGE = "WELCOME";	
+
+}
+
+==== .\java\org\MyAmusementPark\src\utilities\ParkNodeUtilities.java ====
+
+package org.MyAmusementPark.src.utilities;
+
+import org.MyAmusementPark.src.nodes.NodeToCommunicateWith;
+import org.MyAmusementPark.src.nodes.ParkNode;
+
+import java.util.Scanner;
+
+
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class ParkNodeUtilities {
+	/**
+	 * Method which adds neighbours to a node.
+	 * @param parkNode The node to add the neighbours to
+	 */
+	public static void addNeighboursInFlexibleNetworkManually(ParkNode parkNode) {
+		boolean finished = false;
+		Scanner scanner = new Scanner(System.in);
+		while (!finished) {
+			System.out.print("Please provide the id of the neighbour: ");
+			String id = scanner.nextLine();
+			System.out.print("Please provide the IP of the neighbour: ");
+			String ip = scanner.nextLine();
+			System.out.print("Please provide the port of the neighbour: ");
+			String port = scanner.nextLine();
+			NodeToCommunicateWith newNeighbour = new NodeToCommunicateWith(id, ip, port);
+			parkNode.addNeighbour(newNeighbour);
+			System.out.print("Please 'a' to add another neighbour or any other key to finish: ");
+			String cont = scanner.nextLine();
+			if (!cont.equals("a"))
+				finished = true;
+		}
+		scanner.close();
+		System.out.println("Neighbours added successfully");
+	}
+	
+	/**
+	 * Method that adds neighbours to a node from a file.
+	 * @param parkNode the node to add the neighbours to.
+	 */
+	public static void addNeighborsInFlexibleNetworkFromFile(ParkNode parkNode) {
+		
+		parkNode.broadcastToArrayListNodes(MessageTypes.NEW_NEIGHBOUR_MESSAGE, parkNode.possibleNeighbours, null);
+	}
+}
+
+
+==== .\java\org\MyAmusementPark\src\utilities\SharedResourceUtilities.java ====
+
+package org.MyAmusementPark.src.utilities;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class SharedResourceUtilities {
+	
+	private final static String sharedResource = "Shared/Resource.txt";
+	private static int capacity; //How many people we should allow in the park.
+	private static int currentNumberOfVisitors; //How many people are right now inside the park.
+	private static ArrayList<String> validTickets; //ArrayList of tickets that are inside the park (so they are valid for exiting it).
+	
+	/**
+	 * Enter functionality. Read file from the client
+	 * and if there is room for more visitors within the
+	 * park add the ticket id to the validTickets ArrayList.
+	 * Then write the ticket id to the common resource, Resource.txt.
+	 * @param ticketIdToEnter the ticket  id.
+	 * @return true if ENTER request was successful, false otherwise.
+	 */
+	public static boolean enterFunctionality(String ticketIdToEnter) {
+		readFile();
+		if (currentNumberOfVisitors < capacity) {
+			validTickets.add(ticketIdToEnter);
+			currentNumberOfVisitors++;
+			writeFile();
+			return true;
+		}
+		return false;		
+	}
+	
+	/**
+	 * Method for a ticket to exit the park. 
+	 * If the ticket id is already inside 
+	 * the validTickets arrayList then the 
+	 * ticket can exit the park because it 
+	 * is already inside it, otherwise not.
+	 * @param ticketIdToEnter the ticket id we used to enter.
+	 * @return true if exit successful, false otherwise.
+	 */
+	public static boolean exitFunctionality(String ticketIdToEnter) {
+		readFile();
+		if (validTickets.contains(ticketIdToEnter)) {
+			validTickets.remove(ticketIdToEnter);
+			currentNumberOfVisitors--;
+			writeFile();
+			return true;
+		}
+		return false;
+	}
+	
+	/**
+	 * 	Reads from the common resource.
+	 * (capacity, people inside the park, ticket ids).
+	 */
+	public static void readFile() {
+		capacity = 0;
+		currentNumberOfVisitors = 0;
+		validTickets = new ArrayList<String>();
+		BufferedReader br;
+		try {
+			br = new BufferedReader(new FileReader(sharedResource));
+			capacity = Integer.parseInt(br.readLine());
+			currentNumberOfVisitors = Integer.parseInt(br.readLine());
+			String nextLine;
+			while ((nextLine = br.readLine()) != null) {
+				validTickets.add(nextLine);
+			}
+			br.close();
+		} catch (NumberFormatException | IOException e) {
+			System.out.println("Error reading file");
+		}
+	}
+	
+	
+	/**
+	 * Opens the common resource and 
+	 * writes the capacity, the 
+	 * current number of visitors
+	 * and the ticket ids that 
+	 * are inside the park.
+	 */
+	public static void writeFile() {
+		BufferedWriter bw;
+		try {
+			bw = new BufferedWriter(new FileWriter(sharedResource));
+			bw.write(((Integer)capacity).toString());
+			bw.newLine();
+			bw.write(((Integer)currentNumberOfVisitors).toString());
+			int size = validTickets.size();
+			int i;
+			for (i = 0; i < size; i++) {
+				bw.newLine();
+				bw.write(validTickets.get(i));
+			}
+			bw.close();
+		}
+		catch (IOException e) {
+			System.out.println("Error writing to file");
+		}
+	}
+
+}
+
+
+==== .\java\org\MyClient\src\application\ClientFunctionalityClass.java ====
+
+package org.MyClient.src.application;
+
+import org.MyAmusementPark.src.nodes.ParkNodesInputType;
+
+import java.io.*;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.util.Scanner;
+
+import javax.swing.JOptionPane;
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class ClientFunctionalityClass {
+	private Socket socket;
+	private PrintWriter out;
+	private BufferedReader stdIn;
+	
+	public ClientFunctionalityClass() throws IOException {
+		sendRequestToNode();
+	}
+		
+	public void sendRequestToNode() {
+	   
+		String hostIp = null;
+		int hostPort = 0;
+		InputStream inputStream = ParkNodesInputType.class.getResourceAsStream("/ClientFile/ClientFile.txt");
+		if (inputStream == null) {
+			try {
+				throw new FileNotFoundException("Resource not found: /ClientFile.txt");
+			} catch (FileNotFoundException e) {
+				throw new RuntimeException(e);
+			}
+		}
+	    try(BufferedReader br = new BufferedReader(new InputStreamReader(inputStream))) {
+	        String line = br.readLine();
+
+	        while (line != null) {
+	        	String[] tokenizedMessage = line.split(" ");
+	        	hostIp = tokenizedMessage[2];
+	        	hostPort = Integer.parseInt(tokenizedMessage[3]);
+	        	try {
+		        	socket = new Socket(hostIp, hostPort);//Integer.parseInt(tokenizedMessage[3])
+				    out = new PrintWriter(socket.getOutputStream(), true);
+			    	out.println(tokenizedMessage[0] + " " + tokenizedMessage[1]);
+			    	out.close();
+	        	}
+	        	catch (Exception e) {
+	    	    	System.out.println("Cannot find host " + hostIp + ":" + hostPort);
+	    	    }
+	        	line = br.readLine();
+	        }
+	    }
+	    catch (Exception e) {
+	    	System.out.println("Cannot read file");
+	    }
+	}
+}
+
+
+==== .\java\org\MyClient\src\application\ClientMainClass.java ====
+
+package org.MyClient.src.application;
+
+import java.io.IOException;
+
+/**
+ * 
+ * @author dmalonas
+ *
+ */
+public class ClientMainClass {
+	public static void main(String[] args) throws IOException {
+		ClientFunctionalityClass client = new ClientFunctionalityClass();
+	}
+}
