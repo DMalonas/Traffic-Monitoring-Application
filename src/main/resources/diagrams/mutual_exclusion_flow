@@ -1,0 +1,34 @@
+sequence_diagram_mutual_exclusion_Z1235.txt
+────────────────────────────────────────────────────────────────────────────
+Z1235          Node B               Node A (Coordinator)            Resource.txt
+│                │                        │                                 │
+│ ──── ENTER ───▶│                        │                                 │
+│                │──── REQUEST_RESOURCE ▶ │                                 │
+│                │                        │──── CHECK ELIGIBILITY ▶         │
+│                │                        │←──── ENTRY DENIED ◀─────        │
+│                │←────── GRANTED ─────── │                                 │
+│                │──── access attempt ──▶ │                                 │
+│                │←────── DENIED ───────  │                                 │
+│                │──── RELEASE_RESOURCE ▶ │                                 │
+│                │                        │                                 │
+
+(Second attempt after release by another ticket)
+
+│ ──── ENTER ───▶│                        │                                 │
+│                │──── REQUEST_RESOURCE ▶ │                                 │
+│                │                        │──── CHECK ELIGIBILITY ▶         │
+│                │                        │←──── ENTRY ALLOWED ◀────        │
+│                │←────── GRANTED ─────── │                                 │
+│                │──── write Z1235 ─────▶ │                                 │
+│                │──── RELEASE_RESOURCE ▶ │                                 │
+│                │                        │                                 │
+
+│ ──── EXIT ────▶│                        │                                 │
+│                │──── REQUEST_RESOURCE ▶ │                                 │
+│                │                        │──── CHECK VALIDITY ▶───▶        │
+│                │                        │←──── EXIT ALLOWED ◀─────        │
+│                │←────── GRANTED ───────│                                  │
+│                │──── remove Z1235 ────▶│                                  │
+│                │──── RELEASE_RESOURCE ▶│                                  │
+│                │                        │                                 │
+────────────────────────────────────────────────────────────────────────────.

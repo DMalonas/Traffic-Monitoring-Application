@@ -1,0 +1,17 @@
+     Node A                        Node B
+  (port 8000)                   (port 8001)
+     ┌──────┐                     ┌──────┐
+     │      │                     │      │
+     │  A   │ ── NEW_NEIGHBOUR ─▶ │  B   │
+     │      │                     │      │
+     └──────┘                     └──────┘
+        ▲                            │
+        │                            │
+        │       NEW_NEIGHBOUR        ▼
+        │ ◀──────────────────────  B responds
+        |                            |
+        │                            │
+        │         WELCOME            ▼
+        └───────────────────────▶ Node B now knows Node A
+
+       Mutual neighbor relationship established

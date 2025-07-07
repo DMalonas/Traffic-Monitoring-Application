@@ -28,7 +28,7 @@ public class MyAmusementParkMain {
 //		if (args.length > 0) {
 		ParkNodesInputType parkNodesInputType = new ParkNodesInputType(args[0]); //Create node.
 		//		ParkNode parkNode = parkNodesInputType.returnParkNode(); //Return node.
-		ParkNode parkNode = parkNodesInputType.returnParkNode();
+		ParkNode parkNode = parkNodesInputType.returnParkNode(); //Graph building logic
 		Scanner scanner = new Scanner(System.in);
 		while (true) {
 			String input = scanner.nextLine();

@@ -1,0 +1,23 @@
+The initiator (A) can force itself as coordinator, or choose another node based on metric.
+
+Nodes remember their parent for back-propagation or hierarchy.
+
+The system scales if more nodes join — flooding continues in a tree structure.
+
+
+Console       Node A                         Node B
+   |             |                              |
+   |-----------> |                              |
+   |   Trigger: "ELECTION"                      |
+   |             |                              |
+   |             |------ ELECTION ------------->|
+   |             |                              |
+   |             |                              |-- Set parent: A
+   |             |                              |-- Send: ELECTION_ACK [B,40,...]
+   |             |<----- ELECTION_ACK ----------|
+   |             |                              |
+   |             |-- DESIGNATED_ELECTION_STARTER -->
+   |             |-- COORDINATOR A 127.0.0.1 8000 -->
+   |             |                              |-- Receive DESIGNATED_ELECTION_STARTER
+   |             |                              |-- Receive COORDINATOR A ...
+   |             |                              |
