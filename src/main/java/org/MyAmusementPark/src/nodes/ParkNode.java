@@ -380,8 +380,9 @@ public class ParkNode {
 		// If the neighbour has answered our NEW_NEIGHBOUR_MESSAGE with WELCOME_MESSAGE
 		else if (message.equals(MessageTypes.WELCOME_MESSAGE)) {
 			handleWelcomeMessage(parkNodeId, parkNodeIp, parkNodePort);
-		} 
-		//If a node wants to request access from the coordinator or let it know that it will be releasing the resource.
+		}
+		// If the current node is a coordinator and it receives a request
+		// to access or release the shared resource
 		else if (message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) || message.equals(MessageTypes.RELEASING_RESOURCE_MESSAGE)) {
 			handleMessageAsCoordinator(parkNodeId, parkNodeIp, parkNodePort, message);
 		}
@@ -401,7 +402,8 @@ public class ParkNode {
 		else if (message.equals(MessageTypes.COORDINATOR_LEFT_MESSAGE)) {
 			handleCoordinatorLeftMessage(parkNodeId);
 		}
-		/* If the message is from the coordinator making this ParkNode the designated election starter node 
+		/* If the message is from the coordinator making this ParkNode
+		 the designated election starter node
 		   that will start the election if the coordinator leaves or gets terminated. 
 		*/
 		else if (message.equals(MessageTypes.DESIGNATED_ELECTION_STARTER_MESSAGE)) {
@@ -414,23 +416,28 @@ public class ParkNode {
 		 */
 		else {
 			String[] tokenizedMessage = message.split(" ");  // split the message.
-			//One of the children has replied with metric value info.
+			// One of the child nodes has responded with its best
+			// metric value (ELECTION_ACK <id> <metric> <ip> <port>).
+			// This message is sent upwards in the tree so each node can compare candidates.
 			if (tokenizedMessage[0].equals(MessageTypes.ELECTION_ACK_MESSAGE)) {
 				handleMetricReceivedMessage(tokenizedMessage[1]); //the last word of tokenizedMessage[1] contains the metric.
 			}
-			//Handling the new coordinator message. (NEW_COORDINATOR_MESSAGE id ip port) 
+			// The root of the election (the initiator) has now decided the best coordinator.
+			// It sends a NEW_COORDINATOR message to inform everyone who the winner is.
 			else if (tokenizedMessage[0].equals(MessageTypes.NEW_COORDINATOR_MESSAGE)) {
 				handleNewCoordinatorMessage(parkNodeId, tokenizedMessage);
 			}
-			//Handling the existing coordinator message to the new "flexible nodes".
-			else if (tokenizedMessage[0].equals(MessageTypes.EXISTING_COORDINATOR_MESSAGE)) {
+			// When a new flexible node joins the network, it needs to know who
+			// the current coordinator is.
+			// The coordinator sends an EXISTING_COORDINATOR message to help the new node sync up.
+            else if (tokenizedMessage[0].equals(MessageTypes.EXISTING_COORDINATOR_MESSAGE)) {
 				handleExistingCoordinatorMessage(parkNodeId, parkNodeIp, parkNodePort, tokenizedMessage);
 			}
-			//When a ParkNode gets access to the common resource, Resource.txt.
+			// This ParkNode has been granted access to Resource.txt by the coordinator.
 			else if (tokenizedMessage[0].equals(MessageTypes.GRANTED_RESOURCE_ACCESS_MESSAGE)) {
 				handleGrantedResourceAccessMessage(parkNodeId);
 			}
-			//When a ParkNode has been denied access by the coordinator to the common resource Resource.txt.
+			// This ParkNode has been denied access to Resource.txt by the coordinator.
 			else if (tokenizedMessage[0].equals(MessageTypes.DENIED_RESOURCE_ACCESS_MESSAGE)) {
 				handleDeniedResourceAccessMessage(parkNodeId);
 			}
@@ -468,12 +475,12 @@ public class ParkNode {
 		/* Add new neighbour to the list of neighbours. */
 		addNeighbour(newNeighbour);
 	}
-	
+
 	/**
 	 * This method is utilised by a coordinator node.
 	 * Messages handled by a node that has the attribute
 	 * of the coordinator is access requests to the common resource
-	 * Resource.txt, messages that inform the coordinator that 
+	 * Resource.txt, messages that inform the coordinator that
 	 * the resource has been released.
 	 * @param parkNodeId   The id of the ParkNode that sent/forwarded the message
 	 * @param parkNodeIp   The ip of the ParkNode that sent/forwarded the message
@@ -484,23 +491,32 @@ public class ParkNode {
 	 */
 	public void handleMessageAsCoordinator(String parkNodeId, String parkNodeIp, String parkNodePort, String message) {
 		if (isCoordinator) {
+
+			// External node requests access and no one is using the resource → grant immediately
 			if (!parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode == null) {
 				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
 				sendToNode(nodeExpectingReply, MessageTypes.GRANTED_RESOURCE_ACCESS_MESSAGE);
 				currentResourceUtilizingNode = nodeExpectingReply;
 			}
+
+			// External node requests access but resource is occupied → add to queue
 			else if (!parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode != null) {
 				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
 				queueOfRequestingNodes.add(nodeExpectingReply);
 			}
+
+			// Current user releases the resource → grant access to next in queue (external or self)
 			else if (message.equals(MessageTypes.RELEASING_RESOURCE_MESSAGE) && currentResourceUtilizingNode.getId().equals(parkNodeId)) {
 				currentResourceUtilizingNode = null;
 				if (!queueOfRequestingNodes.isEmpty()) {
 					NodeToCommunicateWith nodeExpectingReply = queueOfRequestingNodes.remove();
+
+					// External node → send GRANTED message
 					if (!nodeExpectingReply.getId().equals(id)) {
 						currentResourceUtilizingNode = nodeExpectingReply;
 						sendToNode(nodeExpectingReply, MessageTypes.GRANTED_RESOURCE_ACCESS_MESSAGE);
 					}
+					// Self node → proceed to accessResource directly
 					else {
 						pendingCoordinatorReply = false;
 						currentResourceUtilizingNode = nodeExpectingReply;
@@ -508,12 +524,18 @@ public class ParkNode {
 					}
 				}
 			}
+
+			// This node is the requester, resource is
+			// free → directly access the resource
 			else if (parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode == null) {
 				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
 				pendingCoordinatorReply = false;
 				currentResourceUtilizingNode = nodeExpectingReply;
 				accessResource();
 			}
+
+			// This node is the requester,
+			// but resource is busy → add to queue and wait
 			else if (parkNodeId.equals(id) && message.equals(MessageTypes.REQUEST_RESOURCE_ACCESS_MESSAGE) && currentResourceUtilizingNode != null) {
 				NodeToCommunicateWith nodeExpectingReply = new NodeToCommunicateWith(parkNodeId, parkNodeIp, parkNodePort);
 				queueOfRequestingNodes.add(nodeExpectingReply);

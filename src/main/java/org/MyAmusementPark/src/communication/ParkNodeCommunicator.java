@@ -88,23 +88,42 @@ public class ParkNodeCommunicator {
 			parentParkNode.printToConsole("Node " + id + " is not up or not accepting messages");
 		}
 	}
-	
+
 	/**
-	 * Process incoming message from ParkNodeReceiver. 
-	 * @param incomingMessage The message to process.
-	 * @throws UnknownHostException Message coming from someone
-	 * 		that is not registered as a neighbour.
-	 * @throws IOException IOException.
+	 * Processes an incoming message received by the ParkNodeReceiver.
+	 * Determines if it's from a client (ENTER/EXIT) or another node,
+	 * and delegates to the ParkNode accordingly.
+	 *
+	 * @param incomingMessage The raw message (e.g. "ENTER Z1235 127.0.0.1 8000")
+	 * @throws UnknownHostException if the sender's host cannot be resolved
+	 * @throws IOException if an I/O error occurs
 	 */
 	public void processIncomingMessage(String incomingMessage) throws UnknownHostException, IOException {
-		String arr[] = incomingMessage.split(" ", 2); // https://stackoverflow.com/questions/5067942/what-is-the-best-way-to-extract-the-first-word-from-a-string-in-java
+		// Split the message into two parts: the message type and the rest
+		// https://stackoverflow.com/questions/5067942/what-is-the-best-way-to-extract-the-first-word-from-a-string-in-java
+		String arr[] = incomingMessage.split(" ", 2);
+
 		if (arr.length == 2) {
-			if(arr[0].equals(MessageTypes.ENTER_MESSAGE) || arr[0].equals(MessageTypes.EXIT_MESSAGE)) {	// Message from client.
+
+			// Message from the client (ENTER or EXIT), no need to unpack further
+			if (arr[0].equals(MessageTypes.ENTER_MESSAGE) || arr[0].equals(MessageTypes.EXIT_MESSAGE)) {
+				// arr[0] = message type (ENTER or EXIT)
+				// arr[1] = details (e.g., node ID)
 				parentParkNode.receiveFromClient(arr[0], arr[1]);
-			} else {	// Message from node.
+			}
+
+			// Message from another node
+			else {
+				// arr[1] = "<sender_id> <sender_ip> <sender_port> <actual_message>"
 				String tokenizedMessage[] = arr[1].split(" ", 3);
-				/* ParkNode id, ParkNode ip, ParkNode port, message */
-				parentParkNode.receiveFromNode(arr[0], tokenizedMessage[0], tokenizedMessage[1], tokenizedMessage[2]);
+
+				// Forward to ParkNode with sender info and message
+				parentParkNode.receiveFromNode(
+					arr[0],                     // message type (e.g., ELECTION)
+					tokenizedMessage[0],       // sender ID
+					tokenizedMessage[1],       // sender IP
+					tokenizedMessage[2]        // sender port + actual message
+				);
 			}
 		}
 	}
